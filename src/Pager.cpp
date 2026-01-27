@@ -1,0 +1,122 @@
+#include "db/Pager.h"
+
+#include <sys/stat.h>
+
+namespace mini_db {
+
+Pager::Pager(const std::string& path, size_t page_size) : path_(path), page_size_(page_size) {
+  // 构造时尝试打开或创建文件。
+  std::string err;
+  open_ = open_file(&err);
+}
+
+bool Pager::open_file(std::string* err) {
+  // 以读写二进制方式打开文件，不存在则创建。
+  file_.open(path_, std::ios::in | std::ios::out | std::ios::binary);
+  if (!file_.is_open()) {
+    std::ofstream create(path_, std::ios::out | std::ios::binary);
+    create.close();
+    file_.open(path_, std::ios::in | std::ios::out | std::ios::binary);
+  }
+  if (!file_.is_open()) {
+    if (err) {
+      *err = "failed to open file: " + path_;
+    }
+    return false;
+  }
+  return true;
+}
+
+bool Pager::is_open() const {
+  return open_;
+}
+
+const std::string& Pager::path() const {
+  return path_;
+}
+
+size_t Pager::page_size() const {
+  return page_size_;
+}
+
+size_t Pager::file_size() const {
+  // 使用 stat 获取文件大小，失败视为 0。
+  struct stat st;
+  if (stat(path_.c_str(), &st) != 0) {
+    return 0;
+  }
+  return static_cast<size_t>(st.st_size);
+}
+
+bool Pager::read_page(size_t page_id, std::vector<char>* out, std::string* err) {
+  // 读取指定页，不足部分用 0 填充。
+  if (!open_) {
+    if (err) {
+      *err = "pager not open";
+    }
+    return false;
+  }
+  if (!out) {
+    if (err) {
+      *err = "output buffer missing";
+    }
+    return false;
+  }
+  out->assign(page_size_, 0);
+  size_t offset = page_id * page_size_;
+  size_t size = file_size();
+  if (offset >= size) {
+    // 读取超出文件末尾时返回全 0 页。
+    return true;
+  }
+  file_.seekg(static_cast<std::streamoff>(offset), std::ios::beg);
+  file_.read(out->data(), static_cast<std::streamsize>(page_size_));
+  std::streamsize read_bytes = file_.gcount();
+  if (read_bytes < 0) {
+    if (err) {
+      *err = "failed to read page";
+    }
+    return false;
+  }
+  if (static_cast<size_t>(read_bytes) < page_size_) {
+    // 读到文件末尾时补 0，确保页大小一致。
+    for (size_t i = static_cast<size_t>(read_bytes); i < page_size_; ++i) {
+      (*out)[i] = 0;
+    }
+  }
+  return true;
+}
+
+bool Pager::write_page(size_t page_id, const std::vector<char>& data, std::string* err) {
+  // 将整页写入指定偏移位置。
+  if (!open_) {
+    if (err) {
+      *err = "pager not open";
+    }
+    return false;
+  }
+  if (data.size() != page_size_) {
+    if (err) {
+      *err = "page size mismatch";
+    }
+    return false;
+  }
+  size_t offset = page_id * page_size_;
+  file_.seekp(static_cast<std::streamoff>(offset), std::ios::beg);
+  file_.write(data.data(), static_cast<std::streamsize>(data.size()));
+  if (!file_) {
+    if (err) {
+      *err = "failed to write page";
+    }
+    return false;
+  }
+  return true;
+}
+
+void Pager::flush() {
+  if (open_) {
+    file_.flush();
+  }
+}
+
+}  // namespace mini_db
