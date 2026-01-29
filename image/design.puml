@@ -1,0 +1,167 @@
+@startuml
+skinparam classAttributeIconSize 0
+
+package "mini_db" {
+
+  class Database {
+    - base_dir_: string
+    - page_size_: size_t
+    - cache_pages_: size_t
+    - numa_nodes_: int
+    - catalog_: Catalog
+    - log_: LogManager
+    - tables_: unordered_map<string, TableStorage*>
+    + open(err): bool
+    + close(err): void
+    + create_table(name, columns, err): bool
+    + drop_table(name, err): bool
+    + alter_add_column(name, column, err): bool
+    + insert(table, values, row_id, err): bool
+    + select(table, where, rows, err): bool
+    + update(table, sets, where, updated, err): bool
+    + remove(table, where, removed, err): bool
+  }
+
+  class TableStorage {
+    - path_: string
+    - name_: string
+    - schema_: Schema
+    - file_: PagedFile
+    - log_: LogManager*
+    - row_count_: uint64_t
+    - free_list_: vector<uint64_t>
+    + load(err): bool
+    + insert(values, row_id, err): bool
+    + select(where, rows, err): bool
+    + update(sets, where, updated, err): bool
+    + remove(where, removed, err): bool
+    + apply_redo(row_id, record, err): bool
+    + rebuild_for_schema(new_schema, err): bool
+  }
+
+  class PagedFile {
+    - pager_: Pager
+    - cache_: NumaBufferPool
+    + read_item(offset, size, item, err): bool
+    + write_item(offset, data, err): bool
+    + flush(err): void
+  }
+
+  class Pager {
+    - path_: string
+    - page_size_: size_t
+    + read_page(page_id, out, size, err): bool
+    + write_page(page_id, data, size, err): bool
+    + file_size(): size_t
+  }
+
+  class NumaBufferPool {
+    - topology_: NumaTopology
+    - allocator_: NumaAllocator
+    - selector_: PageNodeSelector
+    - shards_: vector<PageCache>
+    + get_page(page_id, err): Page*
+    + mark_dirty(page_id): void
+    + flush(err): void
+  }
+
+  class PageCache {
+    - pager_: Pager*
+    - capacity_: size_t
+    - page_size_: size_t
+    - node_id_: int
+    - allocator_: NumaAllocator*
+    - pages_: unordered_map<size_t, Entry>
+    - lru_: list<size_t>
+    + get_page(page_id, err): Page*
+    + mark_dirty(page_id): void
+    + flush(err): void
+  }
+
+  class Page {
+    + id: size_t
+    + data: Buffer
+    + dirty: bool
+    + numa_node: int
+  }
+
+  class Buffer {
+    - data_: char*
+    - size_: size_t
+    - node_: int
+    - allocator_: NumaAllocator*
+    + reset(size, node, allocator): void
+  }
+
+  interface NumaTopology {
+    + node_count(): int
+    + current_node(): int
+  }
+
+  interface NumaAllocator {
+    + allocate(size, node): char*
+    + deallocate(ptr, size): void
+  }
+
+  class BufferPoolSelector <<abstract>> {
+    + node_for_page(page_id, node_count): int
+  }
+
+  class ModuloPageSelector {
+    + node_for_page(page_id, node_count): int
+  }
+
+  class Catalog {
+    - path_: string
+    - schemas_: unordered_map<string, Schema>
+    + load(err): bool
+    + save(err): bool
+  }
+
+  class Schema {
+    - columns_: vector<Column>
+    - column_map_: unordered_map<string, size_t>
+    + encode_record(values, valid, err): vector<char>
+    + decode_record(record, values, valid, err): bool
+  }
+
+  class LogManager {
+    - path_: string
+    + append(op, table, row_id, data, err): bool
+    + read_all(entries, err): bool
+    + clear(err): void
+  }
+
+  class SqlParser {
+    + parse(sql, statement, err): bool
+  }
+
+  class Executor {
+    + execute(statement, db, output, err): bool
+  }
+
+  Database "1" o-- "many" TableStorage
+  Database "1" o-- Catalog
+  Database "1" o-- LogManager
+  Database ..> SqlParser
+  Database ..> Executor
+
+  TableStorage o-- PagedFile
+  TableStorage o-- Schema
+  TableStorage ..> LogManager
+
+  PagedFile o-- Pager
+  PagedFile o-- NumaBufferPool
+
+  NumaBufferPool o-- PageCache
+  NumaBufferPool o-- NumaTopology
+  NumaBufferPool o-- NumaAllocator
+  NumaBufferPool ..> PageNodeSelector
+
+  PageCache o-- Page
+  Page o-- Buffer
+
+  ModuloPageSelector ..|> PageNodeSelector
+}
+
+@enduml

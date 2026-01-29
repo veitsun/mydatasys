@@ -12,6 +12,8 @@ Build
 Run
 
 - ./mini_db
+- MINI_DB_NUMA_NODES=2 ./mini_db
+- ./mini_db_bench --rows=10000 --ops=10000 --read=70 --update=20 --delete=10 --data=./data_bench --table=bench_table --cache=256 --numa=2
 
 Supported SQL (case-insensitive)
 
@@ -28,6 +30,8 @@ Notes
 
 - TEXT uses fixed length storage; values longer than the column length are rejected.
 - Data files are stored under ./data (catalog.meta, db.log, and *.tbl).
+- NUMA nodes are configurable via MINI_DB_NUMA_NODES (default: 2). If libnuma is available, the buffer pool allocates pages on the chosen node.
+- mini_db_bench is a local sysbench-like benchmark tool (single-threaded). It reports TPS, QPS, and P99 latency.
 
 ---
 
@@ -38,6 +42,7 @@ Notes
 - CMakeLists.txt: CMake 构建脚本，定义目标与源文件。
 - README.md: 项目说明与使用示例。
 - src/main.cpp: 命令行 REPL 入口，负责读取 SQL、解析并执行。
+- tools/bench/bench.cpp: 本地压测工具入口，生成数据并执行混合读写负载。
 
 SQL 解析与执行
 
@@ -54,11 +59,29 @@ SQL 解析与执行
 存储与分页
 
 - include/db/Pager.h / src/Pager.cpp: 直接与磁盘文件交互的分页读写器。
-- include/db/Cache.h / src/Cache.cpp: 页缓存（LRU），提升 I/O 性能。
-- include/db/PagedFile.h / src/PagedFile.cpp: 按偏移读写数据项的封装，内部使用 Pager + Cache。
+- include/db/Cache.h / src/Cache.cpp: 页缓存分片（LRU），每个分片对应一个 NUMA 节点。
+- include/db/BufferPool.h / src/BufferPool.cpp: NUMA 感知的 BufferPool，按页归属节点路由到缓存分片。
+- include/db/Buffer.h / src/Buffer.cpp: 页数据缓冲区，支持按节点分配与释放。
+- include/db/Numa.h / src/Numa.cpp: NUMA 拓扑与分配器抽象，支持 libnuma 或退化模式。
+- include/db/PagedFile.h / src/PagedFile.cpp: 按偏移读写数据项的封装，内部使用 Pager + NUMA BufferPool。
 - include/db/TableStorage.h / src/TableStorage.cpp: 单表存储引擎，行级 CRUD、表头与空闲行管理。
 - include/db/LogManager.h / src/LogManager.cpp: 简易日志管理，用于崩溃恢复。
 
 通用工具
 
 - include/db/Utils.h / src/Utils.cpp: 字符串处理、十六进制编解码等工具函数。
+
+本地压测工具（mini_db_bench）
+
+- 用途: 类似 sysbench 的本地压测工具（单线程），用于评估基础读写性能。
+- 参数示例: ./mini_db_bench --rows=50000 --ops=200000 --read=80 --update=15 --delete=5 --cache=512 --numa=2
+- 常用参数:
+  - --rows=N: 初始化行数。
+  - --ops=N: 压测操作次数。
+  - --read=PCT/--update=PCT/--delete=PCT: 读/写/删比例。
+  - --data=PATH: 数据目录。
+  - --table=NAME: 表名。
+  - --cache=N: 缓存页数。
+  - --numa=N: NUMA 节点数。
+  - --no-reset: 不清空旧表。
+- 输出指标: TPS, QPS, P99 延迟（ms）。

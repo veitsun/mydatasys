@@ -2,8 +2,13 @@
 
 namespace mini_db {
 
-PageCache::PageCache(Pager* pager, size_t capacity, size_t page_size)
-    : pager_(pager), capacity_(capacity), page_size_(page_size) {}
+PageCache::PageCache(Pager* pager, size_t capacity, size_t page_size, int node_id,
+                     NumaAllocator* allocator)
+    : pager_(pager),
+      capacity_(capacity),
+      page_size_(page_size),
+      node_id_(node_id),
+      allocator_(allocator) {}
 
 bool PageCache::evict_if_needed(std::string* err) {
   // 缓存未满时无需淘汰。
@@ -16,7 +21,8 @@ bool PageCache::evict_if_needed(std::string* err) {
   if (it != pages_.end()) {
     if (it->second.page.dirty) {
       // 脏页需要先写回。
-      if (!pager_->write_page(victim_id, it->second.page.data, err)) {
+      if (!pager_->write_page(victim_id, it->second.page.data.data(),
+                              it->second.page.data.size(), err)) {
         return false;
       }
     }
@@ -39,11 +45,19 @@ Page* PageCache::get_page(size_t page_id, std::string* err) {
     return nullptr;
   }
   // 未命中：从磁盘加载新页。
+  // 使用 NUMA 分配器在指定节点创建页缓冲区。
   Entry entry;
   entry.page.id = page_id;
-  entry.page.data.resize(page_size_, 0);
+  entry.page.data.reset(page_size_, node_id_, allocator_);
   entry.page.dirty = false;
-  if (!pager_->read_page(page_id, &entry.page.data, err)) {
+  entry.page.numa_node = node_id_;
+  if (!entry.page.data.data()) {
+    if (err) {
+      *err = "failed to allocate page buffer";
+    }
+    return nullptr;
+  }
+  if (!pager_->read_page(page_id, entry.page.data.data(), entry.page.data.size(), err)) {
     return nullptr;
   }
   lru_.push_front(page_id);
@@ -64,7 +78,8 @@ void PageCache::flush(std::string* err) {
   // 写回所有脏页并刷新底层文件。
   for (auto& pair : pages_) {
     if (pair.second.page.dirty) {
-      if (!pager_->write_page(pair.first, pair.second.page.data, err)) {
+      if (!pager_->write_page(pair.first, pair.second.page.data.data(),
+                              pair.second.page.data.size(), err)) {
         return;
       }
       pair.second.page.dirty = false;

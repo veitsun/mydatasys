@@ -1,6 +1,6 @@
 #pragma once
 
-#include "db/Cache.h"
+#include "db/BufferPool.h"
 
 #include <cstddef>
 #include <string>
@@ -17,8 +17,8 @@ struct DataItem {
 // 基于页缓存的文件读写封装，提供按偏移读写的 DataItem 抽象。
 class PagedFile {
  public:
-  // path 为文件路径，page_size 为页大小，cache_pages 为缓存页数。
-  PagedFile(const std::string& path, size_t page_size, size_t cache_pages);
+  // path 为文件路径，page_size 为页大小，cache_pages 为缓存页数，numa_nodes 为 NUMA 节点数。
+  PagedFile(const std::string& path, size_t page_size, size_t cache_pages, int numa_nodes);
 
   // 从指定偏移读取 size 字节到 item。
   bool read_item(size_t offset, size_t size, DataItem* item, std::string* err);
@@ -27,7 +27,7 @@ class PagedFile {
   // 刷新缓存与底层文件。
   void flush(std::string* err);
   // 重新绑定到新的文件路径或页配置（用于 schema 重建后替换文件）。
-  void reset(const std::string& path, size_t page_size, size_t cache_pages);
+  void reset(const std::string& path, size_t page_size, size_t cache_pages, int numa_nodes);
 
   // 返回页大小。
   size_t page_size() const;
@@ -37,8 +37,8 @@ class PagedFile {
   const std::string& path() const;
 
  private:
-  Pager pager_;
-  PageCache cache_;
+  Pager pager_;           // PagedFile 是上层封装，用 Pager + NumaBufferPool 提供按偏移读写数据项的接口
+  NumaBufferPool cache_;
 };
 
 }  // namespace mini_db

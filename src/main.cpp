@@ -3,6 +3,7 @@
 #include "db/SqlParser.h"
 #include "db/Utils.h"
 
+#include <cstdlib>
 #include <iostream>
 
 namespace {
@@ -20,12 +21,24 @@ void print_prompt(bool continuation) {
 
 int main() {
   // 初始化数据库（数据目录、页大小、缓存页数）。
-  mini_db::Database db("./data", 4096, 64);
+  int numa_nodes = 2;
+  const char* env_nodes = std::getenv("MINI_DB_NUMA_NODES");
+  if (env_nodes && *env_nodes != '\0') {
+    char* end = nullptr;
+    long parsed = std::strtol(env_nodes, &end, 10);
+    if (end != env_nodes && parsed > 0) {
+      numa_nodes = static_cast<int>(parsed);
+    }
+  }
+  // NUMA 节点数默认 2，可通过环境变量覆盖，便于迁移到 4/8 路。
+  mini_db::Database db("./data", 4096, 64, numa_nodes);
   std::string err;
   if (!db.open(&err)) {
     std::cerr << "Failed to open database: " << err << "\n";
     return 1;
   }
+  std::cout << "Buffer pool fixed at init. NUMA nodes: " << numa_nodes
+            << ", page->node: page_id % " << numa_nodes << "\n";
 
   // 交互式 REPL：解析 SQL 并执行。
   mini_db::SqlParser parser;

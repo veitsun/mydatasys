@@ -15,7 +15,8 @@ namespace mini_db {
 class Database {
  public:
   // base_dir 为数据目录，page_size/ cache_pages 用于表文件与缓存配置。
-  Database(const std::string& base_dir, size_t page_size, size_t cache_pages);
+  // numa_nodes 为 NUMA 节点数配置（便于后续扩展到多路 NUMA）。
+  Database(const std::string& base_dir, size_t page_size, size_t cache_pages, int numa_nodes);
 
   // 打开数据库（加载 catalog、表文件，并做恢复）。
   bool open(std::string* err);
@@ -55,6 +56,7 @@ class Database {
   std::string base_dir_;
   size_t page_size_ = 0;
   size_t cache_pages_ = 0;
+  int numa_nodes_ = 1;
   Catalog catalog_;
   LogManager log_;
   std::unordered_map<std::string, std::unique_ptr<TableStorage>> tables_;

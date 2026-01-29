@@ -13,9 +13,9 @@ namespace mini_db {
 // 单表存储引擎：负责表文件读写、记录管理、简单的增删改查与日志写入。
 class TableStorage {
  public:
-  // path 为表文件路径，name 为表名，schema 为表结构。
+  // path 为表文件路径，name 为表名，schema 为表结构，numa_nodes 为 NUMA 节点数。
   TableStorage(const std::string& path, const std::string& name, const Schema& schema,
-               size_t page_size, size_t cache_pages, LogManager* log);
+               size_t page_size, size_t cache_pages, int numa_nodes, LogManager* log);
 
   // 加载表文件（新建或读取头部与重建空闲列表）。
   bool load(std::string* err);
@@ -74,6 +74,7 @@ class TableStorage {
   std::vector<uint64_t> free_list_;
   size_t page_size_ = 0;
   size_t cache_pages_ = 0;
+  int numa_nodes_ = 1;
 
   static constexpr size_t kHeaderSize = 32;
 };

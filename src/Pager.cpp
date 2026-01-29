@@ -1,5 +1,6 @@
 #include "db/Pager.h"
 
+#include <cstring>
 #include <sys/stat.h>
 
 namespace mini_db {
@@ -48,7 +49,7 @@ size_t Pager::file_size() const {
   return static_cast<size_t>(st.st_size);
 }
 
-bool Pager::read_page(size_t page_id, std::vector<char>* out, std::string* err) {
+bool Pager::read_page(size_t page_id, char* out, size_t size, std::string* err) {
   // 读取指定页，不足部分用 0 填充。
   if (!open_) {
     if (err) {
@@ -62,15 +63,21 @@ bool Pager::read_page(size_t page_id, std::vector<char>* out, std::string* err) 
     }
     return false;
   }
-  out->assign(page_size_, 0);
+  if (size != page_size_) {
+    if (err) {
+      *err = "page size mismatch";
+    }
+    return false;
+  }
+  std::memset(out, 0, page_size_);
   size_t offset = page_id * page_size_;
-  size_t size = file_size();
-  if (offset >= size) {
+  size_t file_bytes = file_size();
+  if (offset >= file_bytes) {
     // 读取超出文件末尾时返回全 0 页。
     return true;
   }
   file_.seekg(static_cast<std::streamoff>(offset), std::ios::beg);
-  file_.read(out->data(), static_cast<std::streamsize>(page_size_));
+  file_.read(out, static_cast<std::streamsize>(page_size_));
   std::streamsize read_bytes = file_.gcount();
   if (read_bytes < 0) {
     if (err) {
@@ -80,14 +87,12 @@ bool Pager::read_page(size_t page_id, std::vector<char>* out, std::string* err) 
   }
   if (static_cast<size_t>(read_bytes) < page_size_) {
     // 读到文件末尾时补 0，确保页大小一致。
-    for (size_t i = static_cast<size_t>(read_bytes); i < page_size_; ++i) {
-      (*out)[i] = 0;
-    }
+    std::memset(out + read_bytes, 0, page_size_ - static_cast<size_t>(read_bytes));
   }
   return true;
 }
 
-bool Pager::write_page(size_t page_id, const std::vector<char>& data, std::string* err) {
+bool Pager::write_page(size_t page_id, const char* data, size_t size, std::string* err) {
   // 将整页写入指定偏移位置。
   if (!open_) {
     if (err) {
@@ -95,7 +100,7 @@ bool Pager::write_page(size_t page_id, const std::vector<char>& data, std::strin
     }
     return false;
   }
-  if (data.size() != page_size_) {
+  if (size != page_size_) {
     if (err) {
       *err = "page size mismatch";
     }
@@ -103,7 +108,7 @@ bool Pager::write_page(size_t page_id, const std::vector<char>& data, std::strin
   }
   size_t offset = page_id * page_size_;
   file_.seekp(static_cast<std::streamoff>(offset), std::ios::beg);
-  file_.write(data.data(), static_cast<std::streamsize>(data.size()));
+  file_.write(data, static_cast<std::streamsize>(size));
   if (!file_) {
     if (err) {
       *err = "failed to write page";

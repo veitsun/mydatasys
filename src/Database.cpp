@@ -71,10 +71,12 @@ bool has_duplicate_columns(const std::vector<Column>& columns, std::string* err)
 
 }  // namespace
 
-Database::Database(const std::string& base_dir, size_t page_size, size_t cache_pages)
+Database::Database(const std::string& base_dir, size_t page_size, size_t cache_pages,
+                   int numa_nodes)
     : base_dir_(base_dir),
       page_size_(page_size),
       cache_pages_(cache_pages),
+      numa_nodes_(numa_nodes),
       catalog_(base_dir + "/catalog.meta"),
       log_(base_dir + "/db.log") {}
 
@@ -116,7 +118,7 @@ bool Database::create_table(const std::string& name, const std::vector<Column>& 
   // 创建并加载表文件。
   std::string key = to_lower(name);
   auto table = std::make_unique<TableStorage>(table_path(key), key, schema, page_size_,
-                                              cache_pages_, &log_);
+                                              cache_pages_, numa_nodes_, &log_);
   if (!table->load(err)) {
     return false;
   }
@@ -279,7 +281,7 @@ bool Database::load_tables(std::string* err) {
       continue;
     }
     auto table = std::make_unique<TableStorage>(table_path(table_name), table_name, schema,
-                                                page_size_, cache_pages_, &log_);
+                                                page_size_, cache_pages_, numa_nodes_, &log_);
     if (!table->load(err)) {
       return false;
     }

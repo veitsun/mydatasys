@@ -20,10 +20,10 @@ class Pager {
   // 返回页大小。
   size_t page_size() const;
 
-  // 读取指定页到 out（长度始终为 page_size）。
-  bool read_page(size_t page_id, std::vector<char>* out, std::string* err);
-  // 将 data 写入指定页（data 必须等于 page_size）。
-  bool write_page(size_t page_id, const std::vector<char>& data, std::string* err);
+  // 读取指定页到 out（size 必须等于 page_size）。
+  bool read_page(size_t page_id, char* out, size_t size, std::string* err);
+  // 将 data 写入指定页（size 必须等于 page_size）。
+  bool write_page(size_t page_id, const char* data, size_t size, std::string* err);
   // 刷新文件缓冲区。
   void flush();
   // 返回文件当前大小（字节）。

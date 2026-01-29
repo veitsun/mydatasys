@@ -55,18 +55,19 @@ bool values_equal(const Value& a, const Value& b, ColumnType type) {
 }  // namespace
 
 TableStorage::TableStorage(const std::string& path, const std::string& name, const Schema& schema,
-                           size_t page_size, size_t cache_pages, LogManager* log)
+                           size_t page_size, size_t cache_pages, int numa_nodes, LogManager* log)
     : path_(path),
       name_(name),
       schema_(schema),
-      file_(path, page_size, cache_pages),
+      file_(path, page_size, cache_pages, numa_nodes),
       log_(log),
       page_size_(page_size),
-      cache_pages_(cache_pages) {}
+      cache_pages_(cache_pages),
+      numa_nodes_(numa_nodes) {}
 
 bool TableStorage::load(std::string* err) {
   // 检查记录大小是否超过页大小，避免无法存储。
-  if (schema_.record_size() > page_size_) {
+  if (schema_.record_size() > page_size_) { 
     if (err) {
       *err = "record size exceeds page size";
     }
@@ -354,7 +355,8 @@ bool TableStorage::apply_redo(uint64_t row_id, const std::vector<char>& record, 
 bool TableStorage::rebuild_for_schema(const Schema& new_schema, std::string* err) {
   // 通过创建临时表文件并迁移数据完成 schema 变更。
   std::string temp_path = path_ + ".tmp";
-  TableStorage temp_table(temp_path, name_, new_schema, page_size_, cache_pages_, nullptr);
+  TableStorage temp_table(temp_path, name_, new_schema, page_size_, cache_pages_, numa_nodes_,
+                          nullptr);
   if (!temp_table.load(err)) {
     return false;
   }
@@ -421,7 +423,7 @@ bool TableStorage::rebuild_for_schema(const Schema& new_schema, std::string* err
   std::remove(backup_path.c_str());
 
   schema_ = new_schema;
-  file_.reset(path_, page_size_, cache_pages_);
+  file_.reset(path_, page_size_, cache_pages_, numa_nodes_);
   return rebuild_free_list(err);
 }
 

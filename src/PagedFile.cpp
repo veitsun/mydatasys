@@ -4,8 +4,8 @@
 
 namespace mini_db {
 
-PagedFile::PagedFile(const std::string& path, size_t page_size, size_t cache_pages)
-    : pager_(path, page_size), cache_(&pager_, cache_pages, page_size) {}
+PagedFile::PagedFile(const std::string& path, size_t page_size, size_t cache_pages, int numa_nodes)
+    : pager_(path, page_size), cache_(&pager_, cache_pages, page_size, numa_nodes) {}
 
 bool PagedFile::read_item(size_t offset, size_t size, DataItem* item, std::string* err) {
   // 按偏移跨页读取，拼接为连续的数据块。
@@ -71,10 +71,10 @@ void PagedFile::flush(std::string* err) {
   cache_.flush(err);
 }
 
-void PagedFile::reset(const std::string& path, size_t page_size, size_t cache_pages) {
+void PagedFile::reset(const std::string& path, size_t page_size, size_t cache_pages, int numa_nodes) {
   // 重新初始化底层 pager 与 cache，用于切换文件。
   pager_ = Pager(path, page_size);
-  cache_ = PageCache(&pager_, cache_pages, page_size);
+  cache_ = NumaBufferPool(&pager_, cache_pages, page_size, numa_nodes);
 }
 
 size_t PagedFile::page_size() const {
