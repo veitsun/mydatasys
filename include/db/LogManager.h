@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -32,6 +33,7 @@ class LogManager {
  private:
   std::string path_;
   uint64_t next_lsn_ = 1;
+  mutable std::mutex mutex_;
 };
 
 }  // namespace mini_db

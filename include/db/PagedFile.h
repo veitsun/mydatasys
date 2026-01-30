@@ -3,6 +3,7 @@
 #include "db/BufferPool.h"
 
 #include <cstddef>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -37,8 +38,9 @@ class PagedFile {
   const std::string& path() const;
 
  private:
-  Pager pager_;           // PagedFile 是上层封装，用 Pager + NumaBufferPool 提供按偏移读写数据项的接口
-  NumaBufferPool cache_;
+  // PagedFile 是上层封装，用 Pager + NumaBufferPool 提供按偏移读写数据项的接口。
+  std::unique_ptr<Pager> pager_;
+  std::unique_ptr<NumaBufferPool> cache_;
 };
 
 }  // namespace mini_db

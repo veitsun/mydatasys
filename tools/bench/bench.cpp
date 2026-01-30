@@ -1,10 +1,13 @@
 #include "db/Database.h"
+#include "db/NumaExecutor.h"
 #include "db/Types.h"
 #include "db/Utils.h"
 
 #include <algorithm>
 #include <chrono>
 #include <cstdlib>
+#include <deque>
+#include <future>
 #include <iostream>
 #include <random>
 #include <string>
@@ -24,6 +27,7 @@ struct BenchConfig {
   bool reset = true;                       // 是否清空旧表
   int numa_nodes = 2;                      // NUMA 节点数
   size_t cache_pages = 256;                // 缓存页数
+  int threads_per_node = 1;                // 每个节点的工作线程数
 };
 
 // 解析 size_t 类型参数（只允许正整数）。
@@ -69,6 +73,7 @@ void print_usage() {
       << "  --table=NAME       表名 (default bench_table)\n"
       << "  --cache=N          缓存页数 (default 256)\n"
       << "  --numa=N           NUMA 节点数 (default 2)\n"
+      << "  --threads-per-node=N 每个 NUMA 节点线程数 (default 1)\n"
       << "  --no-reset         不清空旧表 (默认会重建表)\n";
 }
 
@@ -126,6 +131,10 @@ bool parse_args(int argc, char** argv, BenchConfig* config) {
       if (!parse_int(value, &config->numa_nodes)) {
         return false;
       }
+    } else if (key == "--threads-per-node") {
+      if (!parse_int(value, &config->threads_per_node)) {
+        return false;
+      }
     } else {
       std::cerr << "Unknown argument: " << arg << "\n";
       return false;
@@ -138,6 +147,11 @@ bool parse_args(int argc, char** argv, BenchConfig* config) {
 mini_db::Value make_value(int id) {
   return mini_db::Value::Text("value_" + std::to_string(id));
 }
+
+struct TaskResult {
+  bool ok = true;
+  std::string err;
+};
 
 }  // namespace
 
@@ -154,6 +168,12 @@ int main(int argc, char** argv) {
     std::cerr << "Invalid ratios" << "\n";
     return 1;
   }
+  if (config.numa_nodes <= 0) {
+    config.numa_nodes = 1;
+  }
+  if (config.threads_per_node <= 0) {
+    config.threads_per_node = 1;
+  }
 
   // 3) 初始化数据库实例。
   mini_db::Database db(config.data_dir, 4096, config.cache_pages, config.numa_nodes);
@@ -164,6 +184,7 @@ int main(int argc, char** argv) {
   }
   std::cout << "Buffer pool fixed at init. NUMA nodes: " << config.numa_nodes
             << ", page->node: page_id % " << config.numa_nodes << "\n";
+  std::cout << "Worker threads per node: " << config.threads_per_node << "\n";
 
   // 4) 准备测试表。
   if (config.reset) {
@@ -177,6 +198,12 @@ int main(int argc, char** argv) {
   if (!db.create_table(config.table, columns, &err)) {
     // 如果表已存在，直接继续。
     err.clear();
+  }
+
+  mini_db::Schema schema;
+  if (!db.get_schema(config.table, &schema, &err)) {
+    std::cerr << "Failed to get schema: " << err << "\n";
+    return 1;
   }
 
   // 5) 装载初始数据。
@@ -206,69 +233,118 @@ int main(int argc, char** argv) {
   std::vector<double> latencies_ms;
   latencies_ms.reserve(config.ops);
 
-  // 7) 压测执行：按比例随机执行读/更新/删除+回插。
+  mini_db::NumaExecutor executor(config.numa_nodes, config.threads_per_node);
+  executor.start();
+
+  struct Pending {
+    std::future<TaskResult> future;
+    std::chrono::steady_clock::time_point start;
+  };
+  std::deque<Pending> pending;
+  const size_t max_inflight = 1024;
+  size_t page_size = db.page_size();
+  size_t record_size = schema.record_size();
+
+  // 7) 压测执行：按比例随机执行读/更新/删除+回插（按页归属路由到节点队列）。
+  const std::string table_name = config.table;
   auto start = std::chrono::steady_clock::now();
   for (size_t i = 0; i < config.ops; ++i) {
-    auto op_start = std::chrono::steady_clock::now();
     int key = key_dist(rng);
+    uint64_t row_id = static_cast<uint64_t>(key - 1);
+    size_t page_id = (page_size + row_id * record_size) / page_size;
+    int node = static_cast<int>(page_id % static_cast<size_t>(config.numa_nodes));
     int op = op_dist(rng);
+    auto op_start = std::chrono::steady_clock::now();
     if (op <= config.read_ratio) {
-      // 读操作：按 id 等值查询。
-      mini_db::Condition where;
-      where.has = true;
-      where.column = "id";
-      where.value = mini_db::Value::Int(key);
-      std::vector<std::vector<mini_db::Value>> rows;
-      if (!db.select(config.table, where, &rows, &err)) {
-        std::cerr << "Select failed: " << err << "\n";
-        return 1;
-      }
+      // 读操作：按行号读取，失效行视为成功。
+      auto future = executor.submit(node, [&db, table_name, row_id]() -> TaskResult {
+        TaskResult result;
+        std::vector<mini_db::Value> values;
+        bool valid = false;
+        std::string err;
+        if (!db.read_row(table_name, row_id, &values, &valid, &err)) {
+          result.ok = false;
+          result.err = err;
+          return result;
+        }
+        return result;
+      });
+      pending.push_back({std::move(future), op_start});
       ++read_count;
       query_count += 1;
     } else if (op <= config.read_ratio + config.update_ratio) {
-      // 更新操作：更新 value 列。
+      // 更新操作：按行号更新 value 列。
       mini_db::SetClause set;
       set.column = "value";
       set.value = make_value(static_cast<int>(i));
-      mini_db::Condition where;
-      where.has = true;
-      where.column = "id";
-      where.value = mini_db::Value::Int(key);
-      size_t updated = 0;
-      if (!db.update(config.table, {set}, where, &updated, &err)) {
-        std::cerr << "Update failed: " << err << "\n";
-        return 1;
-      }
+      auto future = executor.submit(node, [&db, table_name, row_id, set]() -> TaskResult {
+        TaskResult result;
+        std::string err;
+        if (!db.update_row(table_name, row_id, {set}, &err)) {
+          if (err != "row is deleted") {
+            result.ok = false;
+            result.err = err;
+          }
+        }
+        return result;
+      });
+      pending.push_back({std::move(future), op_start});
       ++update_count;
       query_count += 1;
     } else {
       // 删除操作：删除后回插，保持数据规模稳定。
-      mini_db::Condition where;
-      where.has = true;
-      where.column = "id";
-      where.value = mini_db::Value::Int(key);
-      size_t removed = 0;
-      if (!db.remove(config.table, where, &removed, &err)) {
-        std::cerr << "Delete failed: " << err << "\n";
-        return 1;
-      }
-      // 删除后重新插入，保持数据规模稳定。
       std::vector<mini_db::Value> values;
       values.push_back(mini_db::Value::Int(key));
       values.push_back(make_value(key));
-      uint64_t row_id = 0;
-      if (!db.insert(config.table, values, &row_id, &err)) {
-        std::cerr << "Re-insert failed: " << err << "\n";
-        return 1;
-      }
+      auto future = executor.submit(node, [&db, table_name, row_id, values]() -> TaskResult {
+        TaskResult result;
+        std::string err;
+        if (!db.delete_row(table_name, row_id, &err)) {
+          if (err != "row is deleted") {
+            result.ok = false;
+            result.err = err;
+            return result;
+          }
+        }
+        if (!db.write_row(table_name, row_id, values, true, &err)) {
+          result.ok = false;
+          result.err = err;
+        }
+        return result;
+      });
+      pending.push_back({std::move(future), op_start});
       ++delete_count;
       query_count += 2;
     }
-    auto op_end = std::chrono::steady_clock::now();
-    std::chrono::duration<double, std::milli> op_elapsed = op_end - op_start;
+
+    if (pending.size() >= max_inflight) {
+      Pending front = std::move(pending.front());
+      pending.pop_front();
+      TaskResult result = front.future.get();
+      auto finish = std::chrono::steady_clock::now();
+      std::chrono::duration<double, std::milli> op_elapsed = finish - front.start;
+      latencies_ms.push_back(op_elapsed.count());
+      if (!result.ok) {
+        std::cerr << "Operation failed: " << result.err << "\n";
+        return 1;
+      }
+    }
+  }
+
+  while (!pending.empty()) {
+    Pending front = std::move(pending.front());
+    pending.pop_front();
+    TaskResult result = front.future.get();
+    auto finish = std::chrono::steady_clock::now();
+    std::chrono::duration<double, std::milli> op_elapsed = finish - front.start;
     latencies_ms.push_back(op_elapsed.count());
+    if (!result.ok) {
+      std::cerr << "Operation failed: " << result.err << "\n";
+      return 1;
+    }
   }
   auto end = std::chrono::steady_clock::now();
+  executor.stop();
 
   // 8) 汇总统计并输出结果。
   std::chrono::duration<double> elapsed = end - start;

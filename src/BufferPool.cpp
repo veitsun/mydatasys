@@ -2,14 +2,6 @@
 
 namespace mini_db {
 
-int ModuloPageSelector::node_for_page(size_t page_id, int node_count) const {
-  // 将页固定映射到某个节点，保证读写一致性。
-  if (node_count <= 0) {
-    return 0;
-  }
-  return static_cast<int>(page_id % static_cast<size_t>(node_count));
-}
-
 NumaBufferPool::NumaBufferPool(Pager* pager, size_t capacity, size_t page_size,
                                int preferred_nodes)
     : topology_(create_numa_topology(preferred_nodes)),
@@ -35,7 +27,8 @@ NumaBufferPool::NumaBufferPool(Pager* pager, size_t capacity, size_t page_size,
   shards_.reserve(static_cast<size_t>(nodes));
   for (int i = 0; i < nodes; ++i) {
     // 每个分片维护自身的 LRU 与页内存分配。
-    shards_.emplace_back(pager, per_node, page_size, i, allocator_.get());
+    auto shard = std::make_unique<PageCache>(pager, per_node, page_size, i, allocator_.get());
+    shards_.push_back(std::move(shard));
   }
 }
 
@@ -54,7 +47,7 @@ void NumaBufferPool::mark_dirty(size_t page_id) {
 void NumaBufferPool::flush(std::string* err) {
   // 逐分片刷新，保证所有脏页落盘。
   for (auto& shard : shards_) {
-    shard.flush(err);
+    shard->flush(err);
     if (err && !err->empty()) {
       return;
     }
@@ -77,7 +70,7 @@ PageCache& NumaBufferPool::shard_for_page(size_t page_id) {
   } else if (node >= nodes) {
     node = node % nodes;
   }
-  return shards_.at(static_cast<size_t>(node));
+  return *shards_.at(static_cast<size_t>(node));
 }
 
 }  // namespace mini_db

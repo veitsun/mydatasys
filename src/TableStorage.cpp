@@ -6,6 +6,7 @@
 #include <cerrno>
 #include <cstdio>
 #include <cstring>
+#include <shared_mutex>
 
 namespace mini_db {
 
@@ -63,7 +64,8 @@ TableStorage::TableStorage(const std::string& path, const std::string& name, con
       log_(log),
       page_size_(page_size),
       cache_pages_(cache_pages),
-      numa_nodes_(numa_nodes) {}
+      numa_nodes_(numa_nodes),
+      page_mutexes_(kPageLockStripes) {}
 
 bool TableStorage::load(std::string* err) {
   // 检查记录大小是否超过页大小，避免无法存储。
@@ -97,6 +99,7 @@ uint64_t TableStorage::row_count() const {
 }
 
 bool TableStorage::insert(const std::vector<Value>& values, uint64_t* row_id, std::string* err) {
+  std::unique_lock<std::shared_mutex> table_lock(table_mutex_);
   // 插入时先做类型与长度校验。
   std::vector<Value> normalized = values;
   if (!schema_.validate_values(&normalized, err)) {
@@ -141,6 +144,7 @@ bool TableStorage::insert(const std::vector<Value>& values, uint64_t* row_id, st
 
 bool TableStorage::select(const Condition& where, std::vector<std::vector<Value>>* rows,
                           std::string* err) {
+  std::unique_lock<std::shared_mutex> table_lock(table_mutex_);
   // 全表扫描 + 单列等值过滤。
   if (!rows) {
     if (err) {
@@ -191,6 +195,7 @@ bool TableStorage::select(const Condition& where, std::vector<std::vector<Value>
 
 bool TableStorage::update(const std::vector<SetClause>& sets, const Condition& where,
                           size_t* updated, std::string* err) {
+  std::unique_lock<std::shared_mutex> table_lock(table_mutex_);
   // 预解析 SET 列并转换类型。
   if (sets.empty()) {
     if (err) {
@@ -278,6 +283,7 @@ bool TableStorage::update(const std::vector<SetClause>& sets, const Condition& w
 }
 
 bool TableStorage::remove(const Condition& where, size_t* removed, std::string* err) {
+  std::unique_lock<std::shared_mutex> table_lock(table_mutex_);
   // 删除同样使用全表扫描。
   int where_idx = -1;
   Value where_value;
@@ -334,7 +340,166 @@ bool TableStorage::remove(const Condition& where, size_t* removed, std::string* 
   return true;
 }
 
+bool TableStorage::read_row(uint64_t row_id, std::vector<Value>* values, bool* valid,
+                            std::string* err) {
+  std::shared_lock<std::shared_mutex> table_lock(table_mutex_);
+  if (row_id >= row_count_) {
+    if (err) {
+      *err = "row_id out of range";
+    }
+    return false;
+  }
+  size_t page_id = page_id_for_row(row_id);
+  std::lock_guard<std::mutex> page_guard(page_lock(page_id));
+  std::vector<char> record;
+  if (!read_record(row_id, &record, err)) {
+    return false;
+  }
+  bool local_valid = false;
+  std::vector<Value> local_values;
+  if (!schema_.decode_record(record, &local_values, &local_valid, err)) {
+    return false;
+  }
+  if (values) {
+    *values = std::move(local_values);
+  }
+  if (valid) {
+    *valid = local_valid;
+  }
+  return true;
+}
+
+bool TableStorage::update_row(uint64_t row_id, const std::vector<SetClause>& sets,
+                              std::string* err) {
+  std::shared_lock<std::shared_mutex> table_lock(table_mutex_);
+  if (row_id >= row_count_) {
+    if (err) {
+      *err = "row_id out of range";
+    }
+    return false;
+  }
+  if (sets.empty()) {
+    if (err) {
+      *err = "no columns to update";
+    }
+    return false;
+  }
+  std::vector<std::pair<size_t, Value>> set_values;
+  set_values.reserve(sets.size());
+  for (const auto& set : sets) {
+    int idx = schema_.column_index(set.column);
+    if (idx < 0) {
+      if (err) {
+        *err = "unknown column in SET: " + set.column;
+      }
+      return false;
+    }
+    Value normalized = set.value;
+    if (!schema_.normalize_value(static_cast<size_t>(idx), &normalized, err)) {
+      return false;
+    }
+    set_values.emplace_back(static_cast<size_t>(idx), std::move(normalized));
+  }
+
+  size_t page_id = page_id_for_row(row_id);
+  std::lock_guard<std::mutex> page_guard(page_lock(page_id));
+  std::vector<char> record;
+  if (!read_record(row_id, &record, err)) {
+    return false;
+  }
+  bool valid = false;
+  std::vector<Value> values;
+  if (!schema_.decode_record(record, &values, &valid, err)) {
+    return false;
+  }
+  if (!valid) {
+    if (err) {
+      *err = "row is deleted";
+    }
+    return false;
+  }
+  for (const auto& pair : set_values) {
+    values[pair.first] = pair.second;
+  }
+  std::vector<char> updated_record = schema_.encode_record(values, true, err);
+  if (updated_record.empty()) {
+    return false;
+  }
+  if (log_) {
+    if (!log_->append("UPDATE", name_, row_id, updated_record, err)) {
+      return false;
+    }
+  }
+  return write_record(row_id, updated_record, err);
+}
+
+bool TableStorage::delete_row(uint64_t row_id, std::string* err) {
+  std::shared_lock<std::shared_mutex> table_lock(table_mutex_);
+  if (row_id >= row_count_) {
+    if (err) {
+      *err = "row_id out of range";
+    }
+    return false;
+  }
+  size_t page_id = page_id_for_row(row_id);
+  std::lock_guard<std::mutex> page_guard(page_lock(page_id));
+  std::vector<char> record;
+  if (!read_record(row_id, &record, err)) {
+    return false;
+  }
+  bool valid = false;
+  if (!schema_.decode_record(record, nullptr, &valid, err)) {
+    return false;
+  }
+  if (!valid) {
+    return true;
+  }
+  record[0] = 0;
+  if (log_) {
+    if (!log_->append("DELETE", name_, row_id, record, err)) {
+      return false;
+    }
+  }
+  if (!write_record(row_id, record, err)) {
+    return false;
+  }
+  {
+    std::lock_guard<std::mutex> meta_lock(meta_mutex_);
+    free_list_.push_back(row_id);
+  }
+  return true;
+}
+
+bool TableStorage::write_row(uint64_t row_id, const std::vector<Value>& values, bool valid,
+                             std::string* err) {
+  std::shared_lock<std::shared_mutex> table_lock(table_mutex_);
+  if (row_id >= row_count_) {
+    if (err) {
+      *err = "row_id out of range";
+    }
+    return false;
+  }
+  std::vector<char> record = schema_.encode_record(values, valid, err);
+  if (record.empty()) {
+    return false;
+  }
+  size_t page_id = page_id_for_row(row_id);
+  std::lock_guard<std::mutex> page_guard(page_lock(page_id));
+  if (log_) {
+    const char* op = valid ? "UPDATE" : "DELETE";
+    if (!log_->append(op, name_, row_id, record, err)) {
+      return false;
+    }
+  }
+  return write_record(row_id, record, err);
+}
+
+size_t TableStorage::page_id_for_row(uint64_t row_id) const {
+  return record_offset(row_id) / page_size_;
+}
+
 bool TableStorage::apply_redo(uint64_t row_id, const std::vector<char>& record, std::string* err) {
+  std::unique_lock<std::shared_mutex> table_lock(table_mutex_);
   // 恢复时直接覆盖指定行。
   if (record.size() != schema_.record_size()) {
     if (err) {
@@ -353,6 +518,7 @@ bool TableStorage::apply_redo(uint64_t row_id, const std::vector<char>& record, 
 }
 
 bool TableStorage::rebuild_for_schema(const Schema& new_schema, std::string* err) {
+  std::unique_lock<std::shared_mutex> table_lock(table_mutex_);
   // 通过创建临时表文件并迁移数据完成 schema 变更。
   std::string temp_path = path_ + ".tmp";
   TableStorage temp_table(temp_path, name_, new_schema, page_size_, cache_pages_, numa_nodes_,
@@ -428,6 +594,7 @@ bool TableStorage::rebuild_for_schema(const Schema& new_schema, std::string* err
 }
 
 bool TableStorage::rebuild_free_list(std::string* err) {
+  std::unique_lock<std::shared_mutex> table_lock(table_mutex_);
   // 扫描所有记录，重建空闲列表。
   free_list_.clear();
   for (uint64_t row_id = 0; row_id < row_count_; ++row_id) {
@@ -523,6 +690,11 @@ bool TableStorage::write_record(uint64_t row_id, const std::vector<char>& record
 size_t TableStorage::record_offset(uint64_t row_id) const {
   // 第一页保留为表头页，数据从第二页开始。
   return page_size_ + static_cast<size_t>(row_id) * schema_.record_size();
+}
+
+std::mutex& TableStorage::page_lock(size_t page_id) {
+  size_t index = page_id % page_mutexes_.size();
+  return page_mutexes_[index];
 }
 
 }  // namespace mini_db

@@ -33,6 +33,7 @@ bool PageCache::evict_if_needed(std::string* err) {
 }
 
 Page* PageCache::get_page(size_t page_id, std::string* err) {
+  std::lock_guard<std::mutex> lock(mutex_);
   // 命中缓存：更新 LRU 顺序。
   auto it = pages_.find(page_id);
   if (it != pages_.end()) {
@@ -67,6 +68,7 @@ Page* PageCache::get_page(size_t page_id, std::string* err) {
 }
 
 void PageCache::mark_dirty(size_t page_id) {
+  std::lock_guard<std::mutex> lock(mutex_);
   // 标记脏页，flush 时写回。
   auto it = pages_.find(page_id);
   if (it != pages_.end()) {
@@ -75,6 +77,7 @@ void PageCache::mark_dirty(size_t page_id) {
 }
 
 void PageCache::flush(std::string* err) {
+  std::lock_guard<std::mutex> lock(mutex_);
   // 写回所有脏页并刷新底层文件。
   for (auto& pair : pages_) {
     if (pair.second.page.dirty) {

@@ -5,6 +5,7 @@
 
 #include <list>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -50,6 +51,7 @@ class PageCache {
   size_t page_size_ = 0;
   int node_id_ = 0;                         // 对应的是哪个 numa node， 一个 PageCache 对象对应一个分片，一个 numa node 拥有一个分片
   NumaAllocator* allocator_ = nullptr;
+  mutable std::mutex mutex_;
   std::list<size_t> lru_;
   std::unordered_map<size_t, Entry> pages_;
 };

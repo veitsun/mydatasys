@@ -69,6 +69,7 @@ bool Pager::read_page(size_t page_id, char* out, size_t size, std::string* err) 
     }
     return false;
   }
+  std::lock_guard<std::mutex> lock(mutex_);
   std::memset(out, 0, page_size_);
   size_t offset = page_id * page_size_;
   size_t file_bytes = file_size();
@@ -106,6 +107,7 @@ bool Pager::write_page(size_t page_id, const char* data, size_t size, std::strin
     }
     return false;
   }
+  std::lock_guard<std::mutex> lock(mutex_);
   size_t offset = page_id * page_size_;
   file_.seekp(static_cast<std::streamoff>(offset), std::ios::beg);
   file_.write(data, static_cast<std::streamsize>(size));
@@ -120,6 +122,7 @@ bool Pager::write_page(size_t page_id, const char* data, size_t size, std::strin
 
 void Pager::flush() {
   if (open_) {
+    std::lock_guard<std::mutex> lock(mutex_);
     file_.flush();
   }
 }

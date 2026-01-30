@@ -14,6 +14,8 @@ set(COMMON_SOURCES
   src/Buffer.cpp
   src/BufferPool.cpp
   src/Numa.cpp
+  src/NumaExecutor.cpp
+  src/NumaThread.cpp
   src/LogManager.cpp
   src/TableStorage.cpp
   src/Catalog.cpp
@@ -34,6 +36,11 @@ add_executable(mini_db_bench
 
 target_include_directories(mini_db PRIVATE include)
 target_include_directories(mini_db_bench PRIVATE include)
+
+# 线程库依赖（std::thread / shared_mutex 需要 pthread）。
+find_package(Threads REQUIRED)
+target_link_libraries(mini_db PRIVATE Threads::Threads)
+target_link_libraries(mini_db_bench PRIVATE Threads::Threads)
 
 # 可选 NUMA 支持：若系统提供 libnuma，则启用真实的 NUMA 分配与拓扑查询。
 find_path(NUMA_INCLUDE_DIR numa.h)

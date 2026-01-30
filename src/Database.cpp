@@ -244,6 +244,65 @@ bool Database::remove(const std::string& table, const Condition& where, size_t* 
   return err ? err->empty() : true;
 }
 
+bool Database::read_row(const std::string& table, uint64_t row_id, std::vector<Value>* values,
+                        bool* valid, std::string* err) {
+  TableStorage* storage = get_table(table);
+  if (!storage) {
+    if (err) {
+      *err = "table not found: " + table;
+    }
+    return false;
+  }
+  return storage->read_row(row_id, values, valid, err);
+}
+
+bool Database::update_row(const std::string& table, uint64_t row_id,
+                          const std::vector<SetClause>& sets, std::string* err) {
+  TableStorage* storage = get_table(table);
+  if (!storage) {
+    if (err) {
+      *err = "table not found: " + table;
+    }
+    return false;
+  }
+  if (!storage->update_row(row_id, sets, err)) {
+    return false;
+  }
+  checkpoint(err);
+  return err ? err->empty() : true;
+}
+
+bool Database::delete_row(const std::string& table, uint64_t row_id, std::string* err) {
+  TableStorage* storage = get_table(table);
+  if (!storage) {
+    if (err) {
+      *err = "table not found: " + table;
+    }
+    return false;
+  }
+  if (!storage->delete_row(row_id, err)) {
+    return false;
+  }
+  checkpoint(err);
+  return err ? err->empty() : true;
+}
+
+bool Database::write_row(const std::string& table, uint64_t row_id,
+                         const std::vector<Value>& values, bool valid, std::string* err) {
+  TableStorage* storage = get_table(table);
+  if (!storage) {
+    if (err) {
+      *err = "table not found: " + table;
+    }
+    return false;
+  }
+  if (!storage->write_row(row_id, values, valid, err)) {
+    return false;
+  }
+  checkpoint(err);
+  return err ? err->empty() : true;
+}
+
 bool Database::get_schema(const std::string& table, Schema* schema, std::string* err) const {
   if (!catalog_.get_schema(table, schema)) {
     if (err) {
@@ -256,6 +315,10 @@ bool Database::get_schema(const std::string& table, Schema* schema, std::string*
 
 std::vector<std::string> Database::list_tables() const {
   return catalog_.list_tables();
+}
+
+size_t Database::page_size() const {
+  return page_size_;
 }
 
 std::string Database::table_path(const std::string& name) const {
@@ -323,6 +386,7 @@ bool Database::recover(std::string* err) {
 }
 
 void Database::checkpoint(std::string* err) {
+  std::lock_guard<std::mutex> lock(checkpoint_mutex_);
   // 刷新所有表并清空日志。
   for (auto& pair : tables_) {
     pair.second->flush(err);

@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <fstream>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -37,6 +38,7 @@ class Pager {
   size_t page_size_ = 0;
   std::fstream file_;
   bool open_ = false;
+  mutable std::mutex mutex_;
 };
 
 }  // namespace mini_db

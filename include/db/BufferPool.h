@@ -2,24 +2,12 @@
 
 #include "db/Cache.h"
 #include "db/Numa.h"
+#include "db/PageRouter.h"
 
 #include <memory>
 #include <vector>
 
 namespace mini_db {
-
-// 页分布策略：决定某个页归属哪个 NUMA 节点。
-class PageNodeSelector {
- public:
-  virtual ~PageNodeSelector() = default;
-  virtual int node_for_page(size_t page_id, int node_count) const = 0;
-};
-
-// 默认策略：按 page_id 做取模分片。
-class ModuloPageSelector : public PageNodeSelector {
- public:
-  int node_for_page(size_t page_id, int node_count) const override;
-};
 
 // NUMA 感知的 BufferPool：将缓存分片到不同节点。整个缓冲池，内部按 NUMA 节点分片成多个 PageCache
 class NumaBufferPool {
@@ -44,7 +32,7 @@ class NumaBufferPool {
   std::unique_ptr<NumaTopology> topology_;
   std::unique_ptr<NumaAllocator> allocator_;
   std::unique_ptr<PageNodeSelector> selector_;
-  std::vector<PageCache> shards_;
+  std::vector<std::unique_ptr<PageCache>> shards_;
   size_t page_size_ = 0;
 };
 

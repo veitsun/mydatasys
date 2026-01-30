@@ -5,6 +5,7 @@
 #include "db/TableStorage.h"
 
 #include <memory>
+#include <mutex>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -37,9 +38,19 @@ class Database {
               size_t* updated, std::string* err);
   bool remove(const std::string& table, const Condition& where, size_t* removed, std::string* err);
 
+  // 行级操作：适用于按行号路由的多线程场景。
+  bool read_row(const std::string& table, uint64_t row_id, std::vector<Value>* values, bool* valid,
+                std::string* err);
+  bool update_row(const std::string& table, uint64_t row_id, const std::vector<SetClause>& sets,
+                  std::string* err);
+  bool delete_row(const std::string& table, uint64_t row_id, std::string* err);
+  bool write_row(const std::string& table, uint64_t row_id, const std::vector<Value>& values,
+                 bool valid, std::string* err);
+
   // 获取表结构与表列表。
   bool get_schema(const std::string& table, Schema* schema, std::string* err) const;
   std::vector<std::string> list_tables() const;
+  size_t page_size() const;
 
  private:
   // 拼接表文件路径。
@@ -60,6 +71,7 @@ class Database {
   Catalog catalog_;
   LogManager log_;
   std::unordered_map<std::string, std::unique_ptr<TableStorage>> tables_;
+  mutable std::mutex checkpoint_mutex_;
 };
 
 }  // namespace mini_db

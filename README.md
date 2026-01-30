@@ -13,7 +13,7 @@ Run
 
 - ./mini_db
 - MINI_DB_NUMA_NODES=2 ./mini_db
-- ./mini_db_bench --rows=10000 --ops=10000 --read=70 --update=20 --delete=10 --data=./data_bench --table=bench_table --cache=256 --numa=2
+- ./mini_db_bench --rows=10000 --ops=10000 --read=70 --update=20 --delete=10 --data=./data_bench --table=bench_table --cache=256 --numa=2 --threads-per-node=2
 
 Supported SQL (case-insensitive)
 
@@ -31,7 +31,8 @@ Notes
 - TEXT uses fixed length storage; values longer than the column length are rejected.
 - Data files are stored under ./data (catalog.meta, db.log, and *.tbl).
 - NUMA nodes are configurable via MINI_DB_NUMA_NODES (default: 2). If libnuma is available, the buffer pool allocates pages on the chosen node.
-- mini_db_bench is a local sysbench-like benchmark tool (single-threaded). It reports TPS, QPS, and P99 latency.
+- mini_db_bench is a local sysbench-like benchmark tool (multi-threaded, NUMA-aware). It reports TPS, QPS, and P99 latency.
+- NumaExecutor provides per-node worker queues; benchmark operations are routed by page_id to avoid cross-node migration. Thread binding uses libnuma when available, otherwise it falls back to OS scheduling.
 
 ---
 
@@ -70,11 +71,15 @@ SQL 解析与执行
 通用工具
 
 - include/db/Utils.h / src/Utils.cpp: 字符串处理、十六进制编解码等工具函数。
+- include/db/PageRouter.h: 页归属路由策略接口与默认实现。
+- include/db/NumaExecutor.h / src/NumaExecutor.cpp: NUMA 线程执行器（每节点固定线程组与队列，用于按页归属路由执行任务）。
+- include/db/NumaThread.h / src/NumaThread.cpp: 线程绑定到 NUMA 节点的工具封装（libnuma 可用时绑定）。
 
 本地压测工具（mini_db_bench）
 
-- 用途: 类似 sysbench 的本地压测工具（单线程），用于评估基础读写性能。
-- 参数示例: ./mini_db_bench --rows=50000 --ops=200000 --read=80 --update=15 --delete=5 --cache=512 --numa=2
+- 用途: 类似 sysbench 的本地压测工具（多线程、NUMA 感知），用于评估基础读写性能。
+- 执行模型: 请求按记录所属页路由到对应 NUMA 节点的队列执行，避免运行中频繁切核。
+- 参数示例: ./mini_db_bench --rows=50000 --ops=200000 --read=80 --update=15 --delete=5 --cache=512 --numa=2 --threads-per-node=2
 - 常用参数:
   - --rows=N: 初始化行数。
   - --ops=N: 压测操作次数。
@@ -83,5 +88,6 @@ SQL 解析与执行
   - --table=NAME: 表名。
   - --cache=N: 缓存页数。
   - --numa=N: NUMA 节点数。
+  - --threads-per-node=N: 每个 NUMA 节点线程数。
   - --no-reset: 不清空旧表。
 - 输出指标: TPS, QPS, P99 延迟（ms）。
