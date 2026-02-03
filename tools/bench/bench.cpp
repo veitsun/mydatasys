@@ -64,7 +64,7 @@ bool parse_int(const std::string& value, int* out) {
 void print_usage() {
   std::cout
       << "mini_db_bench usage:\n"
-      << "  --rows=N           初始化数据行数 (default 10000)\n"
+      << "  --rows=N           读取数据行数范围 (default 10000)\n"
       << "  --ops=N            压测操作次数 (default 10000)\n"
       << "  --read=PCT         读比例 (default 70)\n"
       << "  --update=PCT       更新比例 (default 20)\n"
@@ -74,7 +74,7 @@ void print_usage() {
       << "  --cache=N          缓存页数 (default 256)\n"
       << "  --numa=N           NUMA 节点数 (default 2)\n"
       << "  --threads-per-node=N 每个 NUMA 节点线程数 (default 1)\n"
-      << "  --no-reset         不清空旧表 (默认会重建表)\n";
+      << "  --no-reset         已废弃（请使用 mini_db_bench_prepare 预载数据）\n";
 }
 
 // 解析命令行参数并写入配置结构。
@@ -194,46 +194,17 @@ int main(int argc, char** argv) {
     std::cout << "\n";
   }
 
-  // 4) 准备测试表。
-  if (config.reset) {
-    db.drop_table(config.table, &err);
-    err.clear();
-  }
-
-  std::vector<mini_db::Column> columns;
-  columns.push_back({"id", mini_db::ColumnType::Int, 0});
-  columns.push_back({"value", mini_db::ColumnType::Text, 32});
-  if (!db.create_table(config.table, columns, &err)) {
-    // 如果表已存在，直接继续。
-    err.clear();
-  }
-
+  // 4) 读取表结构（压测工具只负责执行负载，准备数据请使用独立工具）。
   mini_db::Schema schema;
   if (!db.get_schema(config.table, &schema, &err)) {
-    std::cerr << "Failed to get schema: " << err << "\n";
+    std::cerr << "Failed to get schema: " << err
+              << ". Please prepare table/data with mini_db_bench_prepare.\n";
     return 1;
   }
 
-  // 5) 装载初始数据。
-  std::cout << "Loading " << config.rows << " rows...\n";
-  for (size_t i = 0; i < config.rows; ++i) {
-    std::vector<mini_db::Value> values;
-    values.push_back(mini_db::Value::Int(static_cast<int32_t>(i + 1)));
-    values.push_back(make_value(static_cast<int>(i + 1)));
-    uint64_t row_id = 0;
-    if (!db.insert(config.table, values, &row_id, &err)) {
-      std::cerr << "Insert failed: " << err << "\n";
-      return 1;
-    }
-  }
-  {
-    std::vector<size_t> pages = db.cached_pages_per_node();
-    std::cout << "Buffer pool pages per NUMA node after load:";
-    for (size_t i = 0; i < pages.size(); ++i) {
-      std::cout << " N" << i << "=" << pages[i];
-    }
-    std::cout << "\n";
-  }
+  // NUMA 执行器：每个节点一组固定工作线程，用于执行压测负载。
+  mini_db::NumaExecutor executor(config.numa_nodes, config.threads_per_node);
+  executor.start();
 
   // 6) 初始化随机数生成器与负载分布。
   std::mt19937 rng(static_cast<unsigned int>(std::chrono::steady_clock::now()
@@ -248,9 +219,6 @@ int main(int argc, char** argv) {
   size_t query_count = 0;
   std::vector<double> latencies_ms;
   latencies_ms.reserve(config.ops);
-
-  mini_db::NumaExecutor executor(config.numa_nodes, config.threads_per_node);
-  executor.start();
 
   struct Pending {
     std::future<TaskResult> future;

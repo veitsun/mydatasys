@@ -34,6 +34,10 @@ add_executable(mini_db_bench
   ${COMMON_SOURCES}
 )
 
+add_executable(mini_db_bench_prepare
+  tools/bench/bench_prepare.cpp
+)
+
 add_executable(mini_db_numa_monitor
   tools/numa_monitor/numa_monitor.cpp
 )

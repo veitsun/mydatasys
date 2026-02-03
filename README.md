@@ -13,6 +13,7 @@ Run
 
 - ./mini_db
 - MINI_DB_NUMA_NODES=2 ./mini_db
+- ./mini_db_bench_prepare --rows=10000 --data=./data_bench --table=bench_table
 - ./mini_db_bench --rows=10000 --ops=10000 --read=70 --update=20 --delete=10 --data=./data_bench --table=bench_table --cache=256 --numa=2 --threads-per-node=2
 - ./mini_db_numa_monitor --pid=1234 --interval-ms=1000
 - ./mini_db_bench_monitor --interval-ms=1000 -- --rows=10000 --ops=200000
@@ -50,7 +51,8 @@ Notes
 - CMakeLists.txt: CMake 构建脚本，定义目标与源文件。
 - README.md: 项目说明与使用示例。
 - src/main.cpp: 命令行 REPL 入口，负责读取 SQL、解析并执行。
-- tools/bench/bench.cpp: 本地压测工具入口，生成数据并执行混合读写负载。
+- tools/bench/bench.cpp: 本地压测工具入口，仅执行混合读写负载。
+- tools/bench/bench_prepare.cpp: 压测准备工具入口，直接生成 catalog.meta 与表文件。
 - tools/numa_monitor/numa_monitor.cpp: NUMA 监控工具入口，实时输出目标进程的节点内存与访问统计。
 - tools/numa_monitor/bench_monitor.cpp: 压测 + 监控的自动化入口（启动压测并自动监控其 PID）。
 
@@ -90,7 +92,7 @@ SQL 解析与执行
 - 执行模型: 请求按记录所属页路由到对应 NUMA 节点的队列执行，避免运行中频繁切核。
 - 参数示例: ./mini_db_bench --rows=50000 --ops=200000 --read=80 --update=15 --delete=5 --cache=512 --numa=2 --threads-per-node=2
 - 常用参数:
-  - --rows=N: 初始化行数。
+  - --rows=N: 读取数据行数范围（表数据需提前准备）。
   - --ops=N: 压测操作次数。
   - --read=PCT/--update=PCT/--delete=PCT: 读/写/删比例。
   - --data=PATH: 数据目录。
@@ -98,8 +100,19 @@ SQL 解析与执行
   - --cache=N: 缓存页数。
   - --numa=N: NUMA 节点数。
   - --threads-per-node=N: 每个 NUMA 节点线程数。
-  - --no-reset: 不清空旧表。
+  - --no-reset: 已废弃（请使用 mini_db_bench_prepare 预载数据）。
 - 输出指标: TPS, QPS, P99 延迟（ms）。
+
+压测准备工具（mini_db_bench_prepare）
+
+ - 用途: 直接生成 catalog.meta 与表文件（固定表结构 id INT + value TEXT(32)）。
+ - 参数示例: ./mini_db_bench_prepare --rows=50000 --data=./data_bench --table=bench_table
+ - 说明: --data 使用相对路径时，会基于当前工作目录生成数据文件。
+- 常用参数:
+  - --rows=N: 初始化行数。
+  - --data=PATH: 数据目录。
+  - --table=NAME: 表名。
+  - --no-reset: 不清空旧表。
 
 NUMA 监控工具（mini_db_numa_monitor）
 
@@ -143,8 +156,8 @@ NUMA 对比实验命令（示例）
 
 - 实验前清理 OS page cache: sync; echo 3 > /proc/sys/vm/drop_caches
 - A. NUMA 开启（只用 node0/node1）:
-  MINI_DB_NUMA_NODES=2 ./mini_db_bench_monitor --interval-ms=1000 -- --rows=5000000 --ops=200000 --read=80 --update=15 --delete=5 --data=./data_bench_a --cache=8192 --numa=2 --threads-per-node=8
+  MINI_DB_NUMA_NODES=2 ./mini_db_bench_monitor --interval-ms=1000 -- --rows=20000000 --ops=500000 --read=80 --update=15 --delete=5 --data=./data_bench_d --cache=32768 --numa=2 --threads-per-node=16
 - B. NUMA 关闭（仍保留 2 分片与线程数）:
-  MINI_DB_NUMA_NODES=2 MINI_DB_ENABLE_NUMA=0 ./mini_db_bench_monitor --interval-ms=1000 -- --rows=5000000 --ops=200000 --read=80 --update=15 --delete=5 --data=./data_bench_b --cache=8192 --numa=2 --threads-per-node=8
+  MINI_DB_NUMA_NODES=2 MINI_DB_ENABLE_NUMA=0 ./mini_db_bench_monitor --interval-ms=1000 -- --rows=20000000 --ops=500000 --read=80 --update=15 --delete=5 --data=./data_bench_d --cache=32768 --numa=2 --threads-per-node=16
 - C. NUMA 关闭 + 强制分配到 node0:
-  MINI_DB_NUMA_NODES=2 MINI_DB_ENABLE_NUMA=0 MINI_DB_NUMA_ALLOC_NODE=0 ./mini_db_bench_monitor --interval-ms=1000 -- --rows=5000000 --ops=200000 --read=80 --update=15 --delete=5 --data=./data_bench_c --cache=8192 --numa=2 --threads-per-node=8
+  MINI_DB_NUMA_NODES=2 MINI_DB_ENABLE_NUMA=0 MINI_DB_NUMA_ALLOC_NODE=0 ./mini_db_bench_monitor --interval-ms=1000 -- --rows=20000000 --ops=500000 --read=80 --update=15 --delete=5 --data=./data_bench_d --cache=32768 --numa=2 --threads-per-node=16

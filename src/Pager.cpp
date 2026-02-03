@@ -2,6 +2,8 @@
 
 #include <cstring>
 #include <sys/stat.h>
+#include <cerrno>
+#include <string>
 
 namespace mini_db {
 
@@ -77,6 +79,8 @@ bool Pager::read_page(size_t page_id, char* out, size_t size, std::string* err) 
     // 读取超出文件末尾时返回全 0 页。
     return true;
   }
+  // 清理流状态，避免上次 EOF/fail 影响本次读。
+  file_.clear();
   file_.seekg(static_cast<std::streamoff>(offset), std::ios::beg);
   file_.read(out, static_cast<std::streamsize>(page_size_));
   std::streamsize read_bytes = file_.gcount();
@@ -90,6 +94,8 @@ bool Pager::read_page(size_t page_id, char* out, size_t size, std::string* err) 
     // 读到文件末尾时补 0，确保页大小一致。
     std::memset(out + read_bytes, 0, page_size_ - static_cast<size_t>(read_bytes));
   }
+  // 读取到 EOF 时会设置 eof/fail 标志，后续写需要先清理。
+  file_.clear();
   return true;
 }
 
@@ -109,11 +115,41 @@ bool Pager::write_page(size_t page_id, const char* data, size_t size, std::strin
   }
   std::lock_guard<std::mutex> lock(mutex_);
   size_t offset = page_id * page_size_;
+  // 清理流状态，避免上次 EOF/fail 影响本次写。
+  file_.clear();
   file_.seekp(static_cast<std::streamoff>(offset), std::ios::beg);
   file_.write(data, static_cast<std::streamsize>(size));
   if (!file_) {
     if (err) {
-      *err = "failed to write page";
+      int code = errno;
+      if (code == 0) {
+        std::string state;
+        if (file_.bad()) {
+          state = "bad";
+        } else if (file_.fail()) {
+          state = "fail";
+        } else if (file_.eof()) {
+          state = "eof";
+        } else {
+          state = "unknown";
+        }
+        *err = "failed to write page: file=" + path_ + ", state=" + state +
+               ", offset=" + std::to_string(offset);
+      } else {
+        std::string state;
+        if (file_.bad()) {
+          state = "bad";
+        } else if (file_.fail()) {
+          state = "fail";
+        } else if (file_.eof()) {
+          state = "eof";
+        } else {
+          state = "unknown";
+        }
+        *err = "failed to write page: file=" + path_ + ", state=" + state +
+               ", offset=" + std::to_string(offset) + ", errno=" +
+               std::to_string(code) + " (" + std::string(std::strerror(code)) + ")";
+      }
     }
     return false;
   }
