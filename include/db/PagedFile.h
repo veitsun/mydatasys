@@ -36,6 +36,8 @@ class PagedFile {
   size_t file_size() const;
   // 返回文件路径。
   const std::string& path() const;
+  // 返回每个 NUMA 节点当前缓存页数。
+  std::vector<size_t> cached_pages_per_node() const;
 
  private:
   // PagedFile 是上层封装，用 Pager + NumaBufferPool 提供按偏移读写数据项的接口。

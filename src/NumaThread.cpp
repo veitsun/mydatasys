@@ -1,5 +1,7 @@
 #include "db/NumaThread.h"
 
+#include "db/Numa.h"
+
 #ifdef HAVE_LIBNUMA
 #include <numa.h>
 #endif
@@ -8,6 +10,12 @@ namespace mini_db {
 
 bool bind_thread_to_node(int node, std::string* err) {
 #ifdef HAVE_LIBNUMA
+  if (!is_numa_enabled()) {
+    if (err) {
+      *err = "NUMA disabled";
+    }
+    return false;
+  }
   // 使用 libnuma 将当前线程绑定到指定节点。
   if (numa_available() < 0) {
     if (err) {

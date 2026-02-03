@@ -91,4 +91,9 @@ void PageCache::flush(std::string* err) {
   pager_->flush();
 }
 
+size_t PageCache::page_count() const {
+  std::lock_guard<std::mutex> lock(mutex_);
+  return pages_.size();
+}
+
 }  // namespace mini_db

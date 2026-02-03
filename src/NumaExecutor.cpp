@@ -1,5 +1,7 @@
 #include "db/NumaExecutor.h"
 
+#include "db/Numa.h"
+
 namespace mini_db {
 
 NumaExecutor::NumaExecutor(int nodes, int threads_per_node)

@@ -2,6 +2,7 @@
 
 #include <cstdlib>
 #include <cstring>
+#include <cctype>
 
 #ifdef HAVE_LIBNUMA
 #include <numa.h>
@@ -111,6 +112,36 @@ int read_env_nodes() {
 
 }  // namespace
 
+bool is_numa_enabled() {
+  // 环境变量 MINI_DB_ENABLE_NUMA=0/false/off 可关闭 NUMA 优化。
+  const char* env = std::getenv("MINI_DB_ENABLE_NUMA");
+  if (!env || std::strlen(env) == 0) {
+    return true;
+  }
+  std::string value(env);
+  for (auto& ch : value) {
+    ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+  }
+  if (value == "0" || value == "false" || value == "off") {
+    return false;
+  }
+  return true;
+}
+
+int forced_numa_alloc_node() {
+  // 环境变量 MINI_DB_NUMA_ALLOC_NODE 可指定分配的目标节点（-1 表示不强制）。
+  const char* env = std::getenv("MINI_DB_NUMA_ALLOC_NODE");
+  if (!env || std::strlen(env) == 0) {
+    return -1;
+  }
+  char* end = nullptr;
+  long value = std::strtol(env, &end, 10);
+  if (end == env || value < 0) {
+    return -1;
+  }
+  return static_cast<int>(value);
+}
+
 /**
  * @brief 根据运行环境是否支持 NUMA，创建一个合适的 NUMA 拓扑对象，并在不支持时自动降级
  * 
@@ -121,6 +152,11 @@ std::unique_ptr<NumaTopology> create_numa_topology(int preferred_nodes) {
   int env_nodes = read_env_nodes();
   int final_nodes = preferred_nodes > 0 ? preferred_nodes : env_nodes;
 #ifdef HAVE_LIBNUMA
+  if (!is_numa_enabled()) {
+    return std::make_unique<FallbackTopology>(final_nodes > 0 ? final_nodes : 1);
+  }
+#endif
+#ifdef HAVE_LIBNUMA
   if (numa_available() >= 0) {
     return std::make_unique<LibNumaTopology>(final_nodes);
   }
@@ -130,7 +166,10 @@ std::unique_ptr<NumaTopology> create_numa_topology(int preferred_nodes) {
 
 std::unique_ptr<NumaAllocator> create_numa_allocator() {
 #ifdef HAVE_LIBNUMA
-  if (numa_available() >= 0) {
+  if (is_numa_enabled() && numa_available() >= 0) {
+    return std::make_unique<LibNumaAllocator>();
+  }
+  if (!is_numa_enabled() && forced_numa_alloc_node() >= 0 && numa_available() >= 0) {
     return std::make_unique<LibNumaAllocator>();
   }
 #endif

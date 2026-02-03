@@ -51,6 +51,8 @@ class Database {
   bool get_schema(const std::string& table, Schema* schema, std::string* err) const;
   std::vector<std::string> list_tables() const;
   size_t page_size() const;
+  // 返回所有表的缓存页分布（按 NUMA 节点汇总）。
+  std::vector<size_t> cached_pages_per_node() const;
 
  private:
   // 拼接表文件路径。

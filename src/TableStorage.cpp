@@ -618,6 +618,11 @@ void TableStorage::flush(std::string* err) {
   file_.flush(err);
 }
 
+std::vector<size_t> TableStorage::cached_pages_per_node() const {
+  std::shared_lock<std::shared_mutex> table_lock(table_mutex_);
+  return file_.cached_pages_per_node();
+}
+
 bool TableStorage::read_header(std::string* err) {
   // 表头位于文件第一个页的起始位置。
   DataItem item;

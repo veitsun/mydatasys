@@ -185,6 +185,14 @@ int main(int argc, char** argv) {
   std::cout << "Buffer pool fixed at init. NUMA nodes: " << config.numa_nodes
             << ", page->node: page_id % " << config.numa_nodes << "\n";
   std::cout << "Worker threads per node: " << config.threads_per_node << "\n";
+  {
+    std::vector<size_t> pages = db.cached_pages_per_node();
+    std::cout << "Buffer pool pages per NUMA node:";
+    for (size_t i = 0; i < pages.size(); ++i) {
+      std::cout << " N" << i << "=" << pages[i];
+    }
+    std::cout << "\n";
+  }
 
   // 4) 准备测试表。
   if (config.reset) {
@@ -218,6 +226,14 @@ int main(int argc, char** argv) {
       return 1;
     }
   }
+  {
+    std::vector<size_t> pages = db.cached_pages_per_node();
+    std::cout << "Buffer pool pages per NUMA node after load:";
+    for (size_t i = 0; i < pages.size(); ++i) {
+      std::cout << " N" << i << "=" << pages[i];
+    }
+    std::cout << "\n";
+  }
 
   // 6) 初始化随机数生成器与负载分布。
   std::mt19937 rng(static_cast<unsigned int>(std::chrono::steady_clock::now()
@@ -247,7 +263,7 @@ int main(int argc, char** argv) {
 
   // 7) 压测执行：按比例随机执行读/更新/删除+回插（按页归属路由到节点队列）。
   const std::string table_name = config.table;
-  auto start = std::chrono::steady_clock::now();
+  auto start = std::chrono::steady_clock::now();    // 开始计时
   for (size_t i = 0; i < config.ops; ++i) {
     int key = key_dist(rng);
     uint64_t row_id = static_cast<uint64_t>(key - 1);
@@ -343,7 +359,7 @@ int main(int argc, char** argv) {
       return 1;
     }
   }
-  auto end = std::chrono::steady_clock::now();
+  auto end = std::chrono::steady_clock::now();  // 结束计时
   executor.stop();
 
   // 8) 汇总统计并输出结果。
@@ -369,6 +385,14 @@ int main(int argc, char** argv) {
   std::cout << "  tps:         " << tps << " ops/s\n";
   std::cout << "  qps:         " << qps << " queries/s\n";
   std::cout << "  p99:         " << p99 << " ms\n";
+  {
+    std::vector<size_t> pages = db.cached_pages_per_node();
+    std::cout << "Buffer pool pages per NUMA node after benchmark:";
+    for (size_t i = 0; i < pages.size(); ++i) {
+      std::cout << " N" << i << "=" << pages[i];
+    }
+    std::cout << "\n";
+  }
 
   // 9) 关闭数据库。
   db.close(&err);

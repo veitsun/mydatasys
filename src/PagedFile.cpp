@@ -92,4 +92,8 @@ const std::string& PagedFile::path() const {
   return pager_ ? pager_->path() : kEmpty;
 }
 
+std::vector<size_t> PagedFile::cached_pages_per_node() const {
+  return cache_ ? cache_->cached_pages_per_node() : std::vector<size_t>{};
+}
+
 }  // namespace mini_db

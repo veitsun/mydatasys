@@ -25,5 +25,9 @@ class NumaAllocator {
 std::unique_ptr<NumaTopology> create_numa_topology(int preferred_nodes);
 // 创建 NUMA 分配器（若系统不支持 NUMA，将退化为普通 malloc/free）。
 std::unique_ptr<NumaAllocator> create_numa_allocator();
+// 返回是否启用 NUMA 优化（可通过环境变量关闭）。
+bool is_numa_enabled();
+// 返回强制分配到指定 NUMA 节点的配置（未设置返回 -1）。
+int forced_numa_alloc_node();
 
 }  // namespace mini_db

@@ -24,6 +24,8 @@ class NumaBufferPool {
 
   // 返回当前可用的 NUMA 节点数。
   int node_count() const;
+  // 返回每个 NUMA 节点缓存中的页数量。
+  std::vector<size_t> cached_pages_per_node() const;
 
  private:
   // 根据页号选择其所属分片。

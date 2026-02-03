@@ -35,6 +35,8 @@ class PageCache {
   void mark_dirty(size_t page_id);
   // 刷新所有脏页到磁盘。
   void flush(std::string* err);
+  // 返回当前缓存中的页数量。
+  size_t page_count() const;
 
  private:
   // 缓存条目：页对象 + LRU 链表迭代器。

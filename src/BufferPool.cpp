@@ -1,5 +1,7 @@
 #include "db/BufferPool.h"
 
+#include "db/Numa.h"
+
 namespace mini_db {
 
 NumaBufferPool::NumaBufferPool(Pager* pager, size_t capacity, size_t page_size,
@@ -25,9 +27,14 @@ NumaBufferPool::NumaBufferPool(Pager* pager, size_t capacity, size_t page_size,
     }
   }
   shards_.reserve(static_cast<size_t>(nodes));
+  int alloc_node = is_numa_enabled() ? -1 : forced_numa_alloc_node();
+  if (!is_numa_enabled() && alloc_node < 0) {
+    alloc_node = 0;
+  }
   for (int i = 0; i < nodes; ++i) {
     // 每个分片维护自身的 LRU 与页内存分配。
-    auto shard = std::make_unique<PageCache>(pager, per_node, page_size, i, allocator_.get());
+    int node_id = (alloc_node >= 0) ? alloc_node : i;
+    auto shard = std::make_unique<PageCache>(pager, per_node, page_size, node_id, allocator_.get());
     shards_.push_back(std::move(shard));
   }
 }
@@ -56,6 +63,15 @@ void NumaBufferPool::flush(std::string* err) {
 
 int NumaBufferPool::node_count() const {
   return topology_ ? topology_->node_count() : 1;
+}
+
+std::vector<size_t> NumaBufferPool::cached_pages_per_node() const {
+  std::vector<size_t> counts;
+  counts.reserve(shards_.size());
+  for (const auto& shard : shards_) {
+    counts.push_back(shard ? shard->page_count() : 0);
+  }
+  return counts;
 }
 
 PageCache& NumaBufferPool::shard_for_page(size_t page_id) {

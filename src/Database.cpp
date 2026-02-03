@@ -321,6 +321,25 @@ size_t Database::page_size() const {
   return page_size_;
 }
 
+std::vector<size_t> Database::cached_pages_per_node() const {
+  size_t nodes = numa_nodes_ > 0 ? static_cast<size_t>(numa_nodes_) : 1;
+  std::vector<size_t> totals(nodes, 0);
+  for (const auto& pair : tables_) {
+    const auto& storage = pair.second;
+    if (!storage) {
+      continue;
+    }
+    std::vector<size_t> per_table = storage->cached_pages_per_node();
+    if (per_table.size() > totals.size()) {
+      totals.resize(per_table.size(), 0);
+    }
+    for (size_t i = 0; i < per_table.size(); ++i) {
+      totals[i] += per_table[i];
+    }
+  }
+  return totals;
+}
+
 std::string Database::table_path(const std::string& name) const {
   // 统一表文件命名规则：<table>.tbl
   return base_dir_ + "/" + name + ".tbl";

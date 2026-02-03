@@ -57,6 +57,8 @@ class TableStorage {
   bool rebuild_free_list(std::string* err);
   // 刷新缓存与文件。
   void flush(std::string* err);
+  // 返回该表缓存分片中每个 NUMA 节点的页数量。
+  std::vector<size_t> cached_pages_per_node() const;
 
  private:
   // 表文件头部：魔数、记录大小、行数等元数据。
