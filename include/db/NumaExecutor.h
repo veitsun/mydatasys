@@ -47,14 +47,14 @@ class NumaExecutor {
  private:
   struct WorkerGroup {
     int node = 0;
-    std::mutex mutex;
-    std::condition_variable cv;
-    std::deque<std::function<void()>> tasks;
+    std::mutex mutex;                 // 互斥锁保护任务队列
+    std::condition_variable cv;               // 条件变量用于工作线程等待任务到来
+    std::deque<std::function<void()>> tasks; // 任务队列，FIFO 顺序执行
     bool stop = false;
-    std::vector<std::thread> threads;
+    std::vector<std::thread> threads;         // 工作线程列表
   };
 
-  // 将任务放入对应节点的队列。
+  // 将任务放入对应节点的队列。 （线程池内部私有实现，外部不能直接使用）
   void enqueue(int node, std::function<void()> task);
   // 节点工作线程主循环。
   void worker_loop(WorkerGroup* group);

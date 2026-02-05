@@ -12,22 +12,28 @@ NumaExecutor::~NumaExecutor() {
   stop();
 }
 
+
 void NumaExecutor::start() {
   // 启动每个 NUMA 节点的线程组。
+  // 如果这里 start() 被多个线程同时调用，这里不是线程安全的
   if (running_) {
+    // 如果已经启动了，就直接返回，避免重复创建线程
     return;
   }
   running_ = true;
+  // 清空并预分配 groups_
   groups_.clear();
   groups_.reserve(static_cast<size_t>(nodes_));
   for (int node = 0; node < nodes_; ++node) {
+    // 为每个 NUMA 节点创建一个 WorkerGroup
     auto group = std::make_unique<WorkerGroup>();
-    group->node = node;
-    group->stop = false;
-    group->threads.reserve(static_cast<size_t>(threads_per_node_));
+    group->node = node;  // 记录这个组属于哪个 numa 节点（后续可能用于绑核/绑内存）
+    group->stop = false; // 初始化停止标志，让 worker_loop 能正常跑
+    group->threads.reserve(static_cast<size_t>(threads_per_node_)); // 每个 WorkerGroup 里启动 threads_per_node_ 个工作线程
     for (int i = 0; i < threads_per_node_; ++i) {
       // 每个节点启动 threads_per_node 个工作线程。
       WorkerGroup* group_ptr = group.get();
+      // 每个工作线程都跑同一个 worker_loop(group_ptr) ，从对应 group 的任务队列里取任务执行
       group->threads.emplace_back([this, group_ptr]() { worker_loop(group_ptr); });
     }
     groups_.push_back(std::move(group));
@@ -100,6 +106,7 @@ void NumaExecutor::worker_loop(WorkerGroup* group) {
   for (;;) {
     std::function<void()> task;
     {
+      // 在 lock 的作用域内，当前线程独占 group->mutex ，其他线程如果也试图锁同一个 mutext，会被阻塞（同一个 group 对象里只有一把锁 mutex）
       std::unique_lock<std::mutex> lock(group->mutex);
       group->cv.wait(lock, [&group]() { return group->stop || !group->tasks.empty(); });
       if (group->stop && group->tasks.empty()) {
@@ -110,6 +117,7 @@ void NumaExecutor::worker_loop(WorkerGroup* group) {
       task = std::move(group->tasks.front());
       group->tasks.pop_front();
     }
+    // 任务从队列中取出后，就由该worker线程同步执行，执行完后才会取下一个
     if (task) {
       task();
     }

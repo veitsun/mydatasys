@@ -39,10 +39,10 @@ class PageCache {
   size_t page_count() const;
 
  private:
-  // 缓存条目：页对象 + LRU 链表迭代器。
+  // 单个页对象条目：页对象 + LRU 链表迭代器。
   struct Entry {
     Page page;
-    std::list<size_t>::iterator lru_it;
+    std::list<size_t>::iterator lru_it; // 指向该页在 lru_ 里的位置，便于 O(1) 更新
   };
 
   // 如果缓存已满则淘汰最久未使用页。
@@ -51,10 +51,10 @@ class PageCache {
   Pager* pager_ = nullptr;
   size_t capacity_ = 0;
   size_t page_size_ = 0;
-  int node_id_ = 0;                         // 对应的是哪个 numa node， 一个 PageCache 对象对应一个分片，一个 numa node 拥有一个分片
-  NumaAllocator* allocator_ = nullptr;
+  int node_id_ = 0;                         // 对应的是哪个 numa node， 该页缓存分片绑定在哪个 numa 节点
+  NumaAllocator* allocator_ = nullptr;      // 用于在指定节点分配内存的 NUMA 分配器
   mutable std::mutex mutex_;
-  std::list<size_t> lru_;
+  std::list<size_t> lru_;       // 保存 page_id 的 LRU 顺序， front 是最近使用，back 最久未使用
   std::unordered_map<size_t, Entry> pages_;
 };
 

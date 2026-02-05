@@ -301,26 +301,29 @@ int main(int argc, char** argv) {
       query_count += 2;
     }
 
+    // 控制最大并发数，避免任务积压过多。当在途任务太多时，强制回收一个最早提交的任务，避免无限堆积
     if (pending.size() >= max_inflight) {
       Pending front = std::move(pending.front());
       pending.pop_front();
-      TaskResult result = front.future.get();
+      TaskResult result = front.future.get();     // 等待该任务完成，并取得结果
       auto finish = std::chrono::steady_clock::now();
-      std::chrono::duration<double, std::milli> op_elapsed = finish - front.start;
+      std::chrono::duration<double, std::milli> op_elapsed = finish - front.start; // 计算这次操作的耗时，记录到 latencies_ms
       latencies_ms.push_back(op_elapsed.count());
       if (!result.ok) {
+        // 如果任务失败，立即输出错误并结束压测
         std::cerr << "Operation failed: " << result.err << "\n";
         return 1;
       }
     }
   }
 
+  // 把所有剩余的在途任务收尾，循环把 pending队列里还没有回收的任务全部 future.get() 掉，确保所有请求都执行完成
   while (!pending.empty()) {
     Pending front = std::move(pending.front());
     pending.pop_front();
     TaskResult result = front.future.get();
     auto finish = std::chrono::steady_clock::now();
-    std::chrono::duration<double, std::milli> op_elapsed = finish - front.start;
+    std::chrono::duration<double, std::milli> op_elapsed = finish - front.start; // 统计每个任务的延迟
     latencies_ms.push_back(op_elapsed.count());
     if (!result.ok) {
       std::cerr << "Operation failed: " << result.err << "\n";
@@ -328,7 +331,7 @@ int main(int argc, char** argv) {
     }
   }
   auto end = std::chrono::steady_clock::now();  // 结束计时
-  executor.stop();
+  executor.stop(); // 停止工作线程组
 
   // 8) 汇总统计并输出结果。
   std::chrono::duration<double> elapsed = end - start;

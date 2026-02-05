@@ -3,6 +3,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <cctype>
+#include <string>
 
 #ifdef HAVE_LIBNUMA
 #include <numa.h>

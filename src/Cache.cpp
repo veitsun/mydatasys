@@ -33,23 +33,27 @@ bool PageCache::evict_if_needed(std::string* err) {
 }
 
 Page* PageCache::get_page(size_t page_id, std::string* err) {
-  std::lock_guard<std::mutex> lock(mutex_);
+  // get_page 用于从页缓存（内存里）里获取一个页对象 Page ，如果缓存里没有该页，就从磁盘加载该页到缓存里
+  std::lock_guard<std::mutex> lock(mutex_);   // 保护缓存结构的互斥锁（线程安全）
   // 命中缓存：更新 LRU 顺序。
-  auto it = pages_.find(page_id);
+  auto it = pages_.find(page_id);   // 查 哈希表
   if (it != pages_.end()) {
-    lru_.erase(it->second.lru_it);
-    lru_.push_front(page_id);
-    it->second.lru_it = lru_.begin();
-    return &it->second.page;
+    // 如果缓存命中：返回缓存中的 Page * ，并更新 LRU
+    lru_.erase(it->second.lru_it);  // 把它从 LRU 链表原位置删掉 O(1)
+    lru_.push_front(page_id);    // 把 page_id 放到 LRU 链表头部，表示最近使用
+    it->second.lru_it = lru_.begin();   // 更新 Entry 里保存的迭代器，指向新的位置。
+    return &it->second.page;  // 返回页地址
   }
+  // 未命中缓存：可能需要淘汰旧页。
   if (!evict_if_needed(err)) {
+    // evict_if_needed 会检查缓存是否已满，如果满则按 lru_.back() 淘汰最久未使用的页
     return nullptr;
   }
   // 未命中：从磁盘加载新页。
   // 使用 NUMA 分配器在指定节点创建页缓冲区。
   Entry entry;
   entry.page.id = page_id;
-  entry.page.data.reset(page_size_, node_id_, allocator_);
+  entry.page.data.reset(page_size_, node_id_, allocator_);  // 分配页缓冲区
   entry.page.dirty = false;
   entry.page.numa_node = node_id_;
   if (!entry.page.data.data()) {
@@ -58,6 +62,7 @@ Page* PageCache::get_page(size_t page_id, std::string* err) {
     }
     return nullptr;
   }
+  // 从磁盘读取页数据进来，放入缓存并返回
   if (!pager_->read_page(page_id, entry.page.data.data(), entry.page.data.size(), err)) {
     return nullptr;
   }

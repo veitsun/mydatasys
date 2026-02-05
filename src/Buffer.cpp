@@ -58,9 +58,13 @@ int Buffer::node() const {
   return node_;
 }
 
+// 用来重新分配一块缓冲区，并把内容清空，同时维护 Buffer 对象内部的状态字段（指针，大小，NUMA 节点，分配器）
 void Buffer::reset(size_t size, int node, NumaAllocator* allocator) {
   // 重新分配缓冲区并清零。
-  release();
+  // size 希望分配的新缓冲区大小（字节数）
+  // node NUMA 节点编号（告诉分配器尽量在该 numa node 上分配内存）
+  // allocator 用于分配内存的分配器对象指针
+  release();  // 释放旧资源
   if (!allocator || size == 0) {
     data_ = nullptr;
     size_ = 0;
@@ -68,15 +72,18 @@ void Buffer::reset(size_t size, int node, NumaAllocator* allocator) {
     allocator_ = allocator;
     return;
   }
+  // 参数有效，记录分配策略并执行分配
   allocator_ = allocator;
   node_ = node;
   size_ = size;
   data_ = allocator_->allocate(size_, node_);
   if (!data_) {
+    // 分配失败，回滚部分状态并返回
     size_ = 0;
     node_ = -1;
     return;
   }
+  // 把新分配的缓冲区全部写成 0
   std::memset(data_, 0, size_);
 }
 
